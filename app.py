@@ -42,13 +42,13 @@ async def shutdown():
 @app.post("/save-recording/")
 async def save_recording(
     candidate_id: str = Form(...),
-    # question_id: str = Form(...),
+    question_id: str = Form(...),
     file: UploadFile = File(...)
 ):
     try:
         
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = f"{candidate_id}_{timestamp}.webm"
+        filename = f"{candidate_id}_{question_id}_{timestamp}.webm"
         save_path = os.path.join(UPLOAD_DIR, filename)
 
         async with aiofiles.open(save_path, "wb") as f:
@@ -56,12 +56,12 @@ async def save_recording(
             await f.write(content)
 
         query = """
-            INSERT INTO recording (candidate_id, file_path, created_at)
-            VALUES ($1, $2, NOW())
-            RETURNING id, candidate_id, file_path, created_at;
+            INSERT INTO recording (candidate_id, question_id, file_path, created_at)
+            VALUES ($1, $2, $3, NOW())
+            RETURNING id, candidate_id, question_id, file_path, created_at;
         """
         async with app.state.db.acquire() as conn:
-            row = await conn.fetchrow(query, candidate_id, save_path)
+            row = await conn.fetchrow(query, candidate_id, question_id, save_path)
 
         result = dict(row)
         if isinstance(result.get("created_at"), datetime):
