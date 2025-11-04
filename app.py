@@ -1,6 +1,8 @@
 # webcamRecorder backend
 
 import os
+import json
+import asyncio
 from datetime import datetime
 from fastapi import FastAPI, File, WebSocket, WebSocketDisconnect, UploadFile, Form, Request
 from fastapi.responses import JSONResponse
@@ -8,11 +10,14 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 import aiofiles
 import asyncpg
+import httpx
 from dotenv import load_dotenv
+from llm_client import generate_question  # import existing generator
 
 load_dotenv()
 
 DATABASE_URL = os.getenv("DATABASE_URL")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
 app = FastAPI()
 
@@ -27,8 +32,8 @@ app.add_middleware(
 
 UPLOAD_DIR = "uploads"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
-
 app.mount("/uploads", StaticFiles(directory=UPLOAD_DIR), name="uploads")
+
 
 @app.on_event("startup")
 async def startup():
@@ -54,7 +59,6 @@ async def save_recording(
         filename = f"{candidate_id}_{question_id}_{timestamp}.webm"
         save_path = os.path.join(UPLOAD_DIR, filename)
 
-        
         async with aiofiles.open(save_path, "wb") as f:
             content = await file.read()
             await f.write(content)
@@ -78,33 +82,53 @@ async def save_recording(
         return JSONResponse(result)
 
     except Exception as e:
-        print("Error:", e)
+        print("Error saving recording:", e)
         return JSONResponse({"error": str(e)}, status_code=500)
-    
-clients=[]
+
+
+clients = []
 
 @app.websocket("/questions")
 async def websocket_endpoint(websocket: WebSocket):
     await websocket.accept()
     clients.append(websocket)
+    print("Client connected")
+
     try:
-        await websocket.send_json({"type": "info", "message": "Connected to interviewer"})
+        await websocket.send_json({"type": "info", "message": "Connected to AI interviewer"})
 
-        import asyncio
-        sample_questions = [
-            {"id": "q1", "text": "Please introduce yourself."},
-            {"id": "q2", "text": "What are your strengths?"},
-            {"id": "q3", "text": "Describe a challenge you’ve overcome."},
-        ]
+        # Generate questions dynamically 
+        questions = []
+        used = set()
 
-        for q in sample_questions:
+        for i in range(2):    
+            while True:
+                q = generate_question(skill="python", difficulty="medium", qtype="video")
+                txt = q.get("prompt_text", "").strip()
+
+                if txt and txt not in used:
+                    used.add(txt)
+                    questions.append({
+                        "id": f"q{i+1}",
+                        "text": txt
+                    })
+                    break
+
+        # Send one question at a time (frontend auto-starts recording)
+        for q in questions:
             await asyncio.sleep(5)
             await websocket.send_json({"type": "question", **q})
 
-        await asyncio.sleep(3)
+        await asyncio.sleep(2)
         await websocket.send_json({"type": "end", "message": "Interview ended"})
+
     except WebSocketDisconnect:
         print("Client disconnected")
+
+    except Exception as e:
+        print("WebSocket error:", e)
+        await websocket.send_json({"type": "error", "message": str(e)})
+
     finally:
         if websocket in clients:
             clients.remove(websocket)
